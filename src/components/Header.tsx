@@ -12,7 +12,11 @@ import {
   Download, 
   Upload,
   Search,
-  ShieldAlert
+  ShieldAlert,
+  Database,
+  FileSpreadsheet,
+  LogOut,
+  User as UserIcon
 } from 'lucide-react';
 import { formatKoreanMonthYear, formatDateString } from '../utils/dateUtils';
 
@@ -31,6 +35,11 @@ interface HeaderProps {
   setSelectedCategoryFilter: (id: string) => void;
   onExportData: () => void;
   onImportData: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onOpenCsvModal: () => void;
+  onExportCsv: () => void;
+  onOpenSqlModal: () => void;
+  user: { id: string; email: string } | null;
+  onSignOut: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -48,6 +57,11 @@ export const Header: React.FC<HeaderProps> = ({
   setSelectedCategoryFilter,
   onExportData,
   onImportData,
+  onOpenCsvModal,
+  onExportCsv,
+  onOpenSqlModal,
+  user,
+  onSignOut,
 }) => {
   const handlePrev = () => {
     const newDate = new Date(currentDate);
@@ -87,38 +101,71 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="bg-white border-b border-stone-200 sticky top-0 z-30 shadow-xs">
       {/* Corporate Mute Executive Top Bar */}
-      <div className="bg-slate-900 text-slate-100 px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between text-xs font-dodum">
+      <div className="bg-slate-900 text-slate-100 px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between text-xs font-dodum flex-wrap gap-2">
         <div className="flex items-center space-x-3">
           <span className="flex items-center gap-1.5 font-semibold tracking-wide bg-slate-800 px-2.5 py-1 rounded text-slate-200 border border-slate-700 shadow-2xs">
             <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
             <span>EXECUTIVE DASHBOARD</span>
           </span>
-          <span className="hidden sm:inline text-slate-300 font-handwriting text-sm">
-            시급도 '상' 미결제 업무: <strong className="text-white font-bold">{urgentCount}건</strong>
+          <span className="hidden lg:inline text-slate-300 font-handwriting text-sm">
+            시급도 '상' 미결제: <strong className="text-white font-bold">{urgentCount}건</strong>
           </span>
+          <button
+            onClick={onOpenSqlModal}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/80 hover:bg-emerald-900/60 transition-colors text-[11px] font-mono"
+            title="Supabase DB 테이블 및 RLS 생성 SQL"
+          >
+            <Database className="w-3 h-3 text-emerald-400" />
+            <span>Supabase SQL</span>
+          </button>
         </div>
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center gap-2">
-            <span className="font-handwriting text-sm">종합 달성률: <strong className="text-white font-bold">{avgProgress}%</strong> ({completedCount}/{totalCount}건 완료)</span>
-            <div className="w-24 bg-slate-800 rounded-full h-2 overflow-hidden hidden sm:block border border-slate-700">
+
+        <div className="flex items-center space-x-3">
+          <div className="hidden sm:flex items-center gap-2">
+            <span className="font-handwriting text-sm">종합 달성률: <strong className="text-white font-bold">{avgProgress}%</strong> ({completedCount}/{totalCount}건)</span>
+            <div className="w-20 bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
               <div className="bg-emerald-500 h-full rounded-full transition-all duration-300" style={{ width: `${avgProgress}%` }} />
             </div>
           </div>
+
+          {/* CSV & Backup Controls */}
           <div className="flex items-center space-x-2 border-l border-slate-700 pl-3">
             <button
-              onClick={onExportData}
-              className="text-slate-300 hover:text-white transition-colors flex items-center gap-1 font-handwriting text-sm"
-              title="데이터 백업"
+              onClick={onOpenCsvModal}
+              className="px-2.5 py-1 bg-emerald-700/80 hover:bg-emerald-600 text-emerald-50 rounded transition-colors flex items-center gap-1 font-handwriting text-xs shadow-2xs"
+              title="CSV 파일 데이터를 Supabase에 누적 저장"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>CSV 누적 저장</span>
+            </button>
+            <button
+              onClick={onExportCsv}
+              className="text-slate-300 hover:text-white transition-colors flex items-center gap-1 font-handwriting text-sm px-1.5 py-0.5"
+              title="현재 일정 CSV로 내보내기"
             >
               <Download className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">백업</span>
+              <span className="hidden md:inline">CSV 추출</span>
             </button>
-            <label className="text-slate-300 hover:text-white transition-colors flex items-center gap-1 cursor-pointer font-handwriting text-sm">
-              <Upload className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">복원</span>
-              <input type="file" accept=".json" onChange={onImportData} className="hidden" />
-            </label>
           </div>
+
+          {/* Authorized User Profile & Sign Out */}
+          {user && (
+            <div className="flex items-center space-x-2 border-l border-slate-700 pl-3">
+              <div className="flex items-center gap-1.5 text-slate-300 text-xs">
+                <UserIcon className="w-3.5 h-3.5 text-slate-400" />
+                <span className="max-w-[120px] truncate text-slate-200 font-mono text-[11px]" title={user.email}>
+                  {user.email}
+                </span>
+              </div>
+              <button
+                onClick={onSignOut}
+                className="text-slate-400 hover:text-rose-300 transition-colors p-1 rounded hover:bg-slate-800"
+                title="로그아웃"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

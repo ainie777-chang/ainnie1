@@ -3,11 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect } from 'react';
 import { Task, Category, ViewMode } from './types';
 import { INITIAL_TASKS, INITIAL_CATEGORIES, CATEGORY_PRESET_COLORS } from './constants';
@@ -17,10 +12,39 @@ import { WeekView } from './components/WeekView';
 import { ListView } from './components/ListView';
 import { TaskModal } from './components/TaskModal';
 import { CategoryModal } from './components/CategoryModal';
-import { Briefcase, CheckSquare, Calendar as CalendarIcon, Sparkles } from 'lucide-react';
+import { CsvImportModal } from './components/CsvImportModal';
+import { SupabaseSqlModal } from './components/SupabaseSqlModal';
+import { LoginScreen } from './components/LoginScreen';
+import { exportTasksToCsv } from './utils/csvUtils';
+import { 
+  getSupabase, 
+  isSupabaseConfigured, 
+  fetchUserTasks, 
+  saveTaskToSupabase, 
+  deleteTaskFromSupabase 
+} from './lib/supabase';
+import { CheckCircle2 } from 'lucide-react';
+
+interface AuthUser {
+  id: string;
+  email: string;
+}
 
 export default function App() {
-  // State initialization with localStorage
+  // Supabase Auth State (인가된 사용자만 진입 허용)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const savedUser = localStorage.getItem('office_auth_user');
+      if (savedUser) return JSON.parse(savedUser);
+    } catch (e) {
+      console.error(e);
+    }
+    return null;
+  });
+
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Tasks & Categories State
   const [tasks, setTasks] = useState<Task[]>(() => {
     try {
       const saved = localStorage.getItem('office_tasks_v1');
@@ -54,8 +78,105 @@ export default function App() {
   const [defaultTaskDate, setDefaultTaskDate] = useState<string | undefined>(undefined);
 
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
 
-  // Sync to localStorage
+  // Toast Notification
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
+
+  // -------------------------------------------------------------
+  // Supabase Auth Initialization & State Listener
+  // -------------------------------------------------------------
+  useEffect(() => {
+    let mounted = true;
+
+    async function checkSession() {
+      if (isSupabaseConfigured()) {
+        try {
+          const supabase = getSupabase();
+          const { data } = await supabase.auth.getSession();
+          if (mounted && data.session?.user) {
+            const userObj: AuthUser = {
+              id: data.session.user.id,
+              email: data.session.user.email || 'authorized_user@company.internal',
+            };
+            setCurrentUser(userObj);
+            localStorage.setItem('office_auth_user', JSON.stringify(userObj));
+          }
+        } catch (err) {
+          console.error('Session check error:', err);
+        }
+      }
+      if (mounted) {
+        setIsAuthLoading(false);
+      }
+    }
+
+    checkSession();
+
+    // Supabase v2 onAuthStateChange listener
+    let authSubscription: any = null;
+    if (isSupabaseConfigured()) {
+      try {
+        const supabase = getSupabase();
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+          if (session?.user) {
+            const userObj: AuthUser = {
+              id: session.user.id,
+              email: session.user.email || '',
+            };
+            setCurrentUser(userObj);
+            localStorage.setItem('office_auth_user', JSON.stringify(userObj));
+          } else if (_event === 'SIGNED_OUT') {
+            setCurrentUser(null);
+            localStorage.removeItem('office_auth_user');
+          }
+        });
+        authSubscription = data.subscription;
+      } catch (err) {
+        console.error('Auth state change listener error:', err);
+      }
+    }
+
+    return () => {
+      mounted = false;
+      if (authSubscription) {
+        authSubscription.unsubscribe();
+      }
+    };
+  }, []);
+
+  // -------------------------------------------------------------
+  // Load tasks from Supabase when user logs in
+  // -------------------------------------------------------------
+  useEffect(() => {
+    if (!currentUser || !isSupabaseConfigured()) return;
+
+    async function loadRemoteTasks() {
+      if (!currentUser) return;
+      const { tasks: remoteTasks, error } = await fetchUserTasks(currentUser.id);
+      if (!error && remoteTasks.length > 0) {
+        setTasks(prev => {
+          // Merge remote tasks with local tasks, preferring remote
+          const remoteIds = new Set(remoteTasks.map(t => t.id));
+          const filteredPrev = prev.filter(t => !remoteIds.has(t.id));
+          return [...remoteTasks, ...filteredPrev];
+        });
+        showToast(`Supabase에서 ${remoteTasks.length}건의 일정을 불러왔습니다.`);
+      }
+    }
+
+    loadRemoteTasks();
+  }, [currentUser]);
+
+  // Sync tasks & categories to localStorage
   useEffect(() => {
     try {
       localStorage.setItem('office_tasks_v1', JSON.stringify(tasks));
@@ -72,10 +193,46 @@ export default function App() {
     }
   }, [categories]);
 
-  // Task CRUD handlers
-  const handleSaveTask = (taskData: Omit<Task, 'id' | 'createdAt'>, taskId?: string) => {
+  // -------------------------------------------------------------
+  // Auth Handlers
+  // -------------------------------------------------------------
+  const handleLoginSuccess = (user: AuthUser) => {
+    setCurrentUser(user);
+    localStorage.setItem('office_auth_user', JSON.stringify(user));
+    showToast(`${user.email} 계정으로 사내 인가 로그인이 완료되었습니다.`);
+  };
+
+  const handleSignOut = async () => {
+    if (isSupabaseConfigured()) {
+      try {
+        const supabase = getSupabase();
+        await supabase.auth.signOut();
+      } catch (e) {
+        console.error('Sign out error:', e);
+      }
+    }
+    setCurrentUser(null);
+    localStorage.removeItem('office_auth_user');
+    showToast('로그아웃되었습니다.');
+  };
+
+  // -------------------------------------------------------------
+  // Task CRUD Handlers with Supabase Sync
+  // -------------------------------------------------------------
+  const handleSaveTask = async (taskData: Omit<Task, 'id' | 'createdAt'>, taskId?: string) => {
     if (taskId) {
-      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...taskData } : t));
+      let updatedTask: Task | null = null;
+      setTasks(prev => prev.map(t => {
+        if (t.id === taskId) {
+          updatedTask = { ...t, ...taskData };
+          return updatedTask;
+        }
+        return t;
+      }));
+
+      if (updatedTask && currentUser) {
+        await saveTaskToSupabase(updatedTask, currentUser.id);
+      }
     } else {
       const newTask: Task = {
         ...taskData,
@@ -83,24 +240,43 @@ export default function App() {
         createdAt: new Date().toISOString(),
       };
       setTasks(prev => [newTask, ...prev]);
+
+      if (currentUser) {
+        await saveTaskToSupabase(newTask, currentUser.id);
+      }
     }
   };
 
-  const handleDeleteTask = (taskId: string) => {
+  const handleDeleteTask = async (taskId: string) => {
     setTasks(prev => prev.filter(t => t.id !== taskId));
+    if (currentUser) {
+      await deleteTaskFromSupabase(taskId, currentUser.id);
+    }
   };
 
-  const handleToggleStatus = (taskId: string) => {
+  const handleToggleStatus = async (taskId: string) => {
+    let changedTask: Task | null = null;
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
         const nextStatus = t.status === 'completed' ? 'todo' : 'completed';
-        return { ...t, status: nextStatus };
+        changedTask = { 
+          ...t, 
+          status: nextStatus,
+          progress: nextStatus === 'completed' ? 100 : t.progress
+        };
+        return changedTask;
       }
       return t;
     }));
+
+    if (changedTask && currentUser) {
+      await saveTaskToSupabase(changedTask, currentUser.id);
+    }
   };
 
-  // Category CRUD handlers
+  // -------------------------------------------------------------
+  // Category CRUD Handlers
+  // -------------------------------------------------------------
   const handleAddCategory = (name: string, preset: typeof CATEGORY_PRESET_COLORS[0]) => {
     const newCat: Category = {
       id: `cat-${Date.now()}`,
@@ -125,7 +301,6 @@ export default function App() {
   };
 
   const handleDeleteCategory = (id: string): boolean => {
-    // Check if any tasks use this category
     const hasTasks = tasks.some(t => t.categoryId === id);
     if (hasTasks) return false;
 
@@ -133,7 +308,31 @@ export default function App() {
     return true;
   };
 
-  // Export / Import
+  // -------------------------------------------------------------
+  // CSV Import & Accumulation Handler
+  // -------------------------------------------------------------
+  const handleCsvImportSuccess = (importedTasks: Task[], message: string) => {
+    setTasks(prev => {
+      const existingMap = new Map(prev.map(t => [t.id, t]));
+      importedTasks.forEach(t => existingMap.set(t.id, t));
+      return Array.from(existingMap.values());
+    });
+    showToast(message);
+  };
+
+  const handleExportCsv = () => {
+    const csvContent = exportTasksToCsv(tasks, categories);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `office-tasks-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('현재 일정이 CSV 파일로 다운로드되었습니다.');
+  };
+
+  // Legacy JSON Export / Import
   const handleExportData = () => {
     const data = {
       tasks,
@@ -163,9 +362,9 @@ export default function App() {
         if (json.categories && Array.isArray(json.categories)) {
           setCategories(json.categories);
         }
-        alert('일정 데이터를 성공적으로 복원했습니다.');
+        showToast('일정 데이터를 성공적으로 복원했습니다.');
       } catch (err) {
-        alert('올바른 백업 파일 형식이 아닙니다.');
+        showToast('올바른 백업 파일 형식이 아닙니다.');
       }
     };
     reader.readAsText(file);
@@ -177,8 +376,45 @@ export default function App() {
     setIsTaskModalOpen(true);
   };
 
+  // -------------------------------------------------------------
+  // Auth Guard: 인가된 사용자만 캘린더 대시보드 접근 허용
+  // -------------------------------------------------------------
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 font-mono text-xs">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-slate-700 border-t-emerald-500 animate-spin" />
+          <span>사내 인가 자격 검증 중...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <>
+        <LoginScreen
+          onLoginSuccess={handleLoginSuccess}
+          onOpenSqlGuide={() => setIsSqlModalOpen(true)}
+        />
+        <SupabaseSqlModal
+          isOpen={isSqlModalOpen}
+          onClose={() => setIsSqlModalOpen(false)}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col font-sans text-stone-900">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white border border-slate-700 px-4 py-3 rounded-xl shadow-xl flex items-center gap-2.5 text-xs animate-in slide-in-from-bottom-3 duration-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span className="leading-tight font-dodum">{toastMessage}</span>
+        </div>
+      )}
+
       {/* Header */}
       <Header
         currentDate={currentDate}
@@ -195,6 +431,11 @@ export default function App() {
         setSelectedCategoryFilter={setSelectedCategoryFilter}
         onExportData={handleExportData}
         onImportData={handleImportData}
+        onOpenCsvModal={() => setIsCsvModalOpen(true)}
+        onExportCsv={handleExportCsv}
+        onOpenSqlModal={() => setIsSqlModalOpen(true)}
+        user={currentUser}
+        onSignOut={handleSignOut}
       />
 
       {/* Main Content Area */}
@@ -241,7 +482,7 @@ export default function App() {
 
       {/* Footer info */}
       <footer className="py-4 text-center text-xs text-stone-500 border-t border-stone-200 bg-white">
-        <p>오피스 및 개인 일정 관리 프로그램 &bull; 뮤트톤 오피스 테마</p>
+        <p>오피스 및 개인 일정 관리 프로그램 &bull; Supabase Auth & DB 연동 완료 &bull; 뮤트톤 오피스 테마</p>
       </footer>
 
       {/* Task Modal */}
@@ -265,7 +506,21 @@ export default function App() {
         onUpdateCategory={handleUpdateCategory}
         onDeleteCategory={handleDeleteCategory}
       />
+
+      {/* CSV Import & Supabase Accumulation Modal */}
+      <CsvImportModal
+        isOpen={isCsvModalOpen}
+        onClose={() => setIsCsvModalOpen(false)}
+        categories={categories}
+        userId={currentUser.id}
+        onImportSuccess={handleCsvImportSuccess}
+      />
+
+      {/* Supabase DB Table & RLS Setup SQL Modal */}
+      <SupabaseSqlModal
+        isOpen={isSqlModalOpen}
+        onClose={() => setIsSqlModalOpen(false)}
+      />
     </div>
   );
 }
-
