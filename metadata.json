@@ -1,0 +1,7 @@
+{
+  "name": "오피스 일정 관리",
+  "description": "사무 및 개인 일정을 주간, 월간 뷰로 관리하고 카테고리별로 체계적으로 정리할 수 있는 뮤트톤 일정 관리 프로그램",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
