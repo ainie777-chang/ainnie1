@@ -44,6 +44,34 @@ export function isSupabaseConfigured(): boolean {
   );
 }
 
+export async function testSupabaseConnection(urlToTest?: string, keyToTest?: string): Promise<{ success: boolean; message: string }> {
+  const targetUrl = (urlToTest || getSupabaseConfig().url).trim();
+  const targetKey = (keyToTest || getSupabaseConfig().anonKey).trim();
+
+  if (!targetUrl || !targetKey) {
+    return { success: false, message: 'Supabase URL과 Anon Key를 모두 입력해야 합니다.' };
+  }
+  if (!targetUrl.startsWith('https://')) {
+    return { success: false, message: 'URL 형식이 올바르지 않습니다. (https:// 로 시작해야 함)' };
+  }
+
+  try {
+    const testClient = createClient(targetUrl, targetKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+
+    // Test pinging session endpoint
+    const { error } = await testClient.auth.getSession();
+    if (error) {
+      return { success: false, message: `Supabase 연결 실패: ${error.message}` };
+    }
+
+    return { success: true, message: 'Supabase 프로젝트와 성공적으로 연결되었습니다!' };
+  } catch (err: any) {
+    return { success: false, message: err?.message || '네트워크 연결 오류가 발생했습니다.' };
+  }
+}
+
 let clientInstance: SupabaseClient | null = null;
 
 function initClient(): SupabaseClient {
